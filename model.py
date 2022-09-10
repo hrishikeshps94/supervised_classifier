@@ -1,3 +1,4 @@
+from operator import mod
 from turtle import forward
 import torch
 import torch.nn as nn
@@ -13,13 +14,19 @@ class ResNet(nn.Module):
 
     def __init__(self, base_model,out_dim=3,feat_extract=True):
         super(ResNet, self).__init__()
-        self.resnet_dict = {"resnet18": models.resnet18(pretrained=True),
-                            "resnet50": models.resnet50(pretrained=True)}
+        self.resnet_dict = {"resnet18": models.resnet18(weights=models.ResNet18_Weights),
+                            "resnet50": models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2),
+                            'effnetv2m':models.efficientnet_v2_m(weights=models.EfficientNet_V2_M_Weights),
+                            'effnetv2s':models.efficientnet_v2_s(weights=models.EfficientNet_V2_S_Weights)}
         self.backbone = self.set_parameter_requires_grad(self._get_basemodel(base_model),feat_extract)
-        dim_mlp = self.backbone.fc.in_features        
-        #add mlp projection head
-        self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
-        # self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp))
+        if base_model=='effnetv2m' or base_model=='effnetv2s' :
+            dim_mlp = self.backbone.classifier[1].in_features
+            self.backbone.classifier = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
+        elif base_model=='resnet18' or base_model=='resnet50':
+            dim_mlp = self.backbone.fc.in_features        
+            #add mlp projection head
+            self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
+            # self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp))
 
     def _get_basemodel(self, model_name):
         model = self.resnet_dict[model_name]
@@ -30,6 +37,10 @@ class ResNet(nn.Module):
             for param in model.parameters():
                 param.requires_grad = False
         return model
+
+    
+    def forward(self, x):
+        return self.backbone(x)
 
     
     def forward(self, x):
@@ -68,223 +79,83 @@ class ResNet_Simclr(nn.Module):
         return out
 
 
+class ResNetFusion(nn.Module):
 
+    def __init__(self, base_model,out_dim=3,feat_extract=True):
+        super(ResNetFusion, self).__init__()
+        self.resnet_dict = {"resnet18": models.resnet18(pretrained=True),
+                            "resnet50": models.resnet50(pretrained=True)}
+        self.backbone = self.set_parameter_requires_grad(self._get_basemodel(base_model),feat_extract)
+        dim_mlp = self.backbone.fc.in_features        
+        #add mlp projection head
+        feat_extract = nn.ModuleList(self.backbone.children())
+        self.in_conv = nn.Conv2d(in_channels=1,out_channels=64,kernel_size=(7,7),padding=(3,3))
+        self.layer_0 = nn.Sequential(*feat_extract[1:4])
+        self.layer_1 = feat_extract[4]
+        self.layer_2 = feat_extract[5]
+        self.layer_3 = feat_extract[6]
+        self.layer_4 = feat_extract[7]
+        self.out_feat = feat_extract[8]
+        self.fusion_head = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
+        self.pool = nn.MaxPool2d(kernel_size=2)
+        self.bottel_neck = nn.Conv2d(960,512,1,padding='same')
+        # self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp))
 
+    def _get_basemodel(self, model_name):
+        model = self.resnet_dict[model_name]
+        return model
 
+    def set_parameter_requires_grad(self,model, feature_extracting):
+        if feature_extracting:
+            for param in model.parameters():
+                param.requires_grad = False
+        return model
 
-class MILVisionTransformer(VisionTransformer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.dist_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
-        num_patches = self.patch_embed.num_patches
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))
-        # self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
-        # self.num_classes=3
-        self.size2 = int(np.sqrt(num_patches))
-        self.dim = self.embed_dim
-        self.L = 256 #self.dim//3
-        self.D = 128 #self.dim//5
-        self.K = 1 #self.num_classes*1
-        # self.head = nn.Linear(in_features=384,out_features=self.num_classes)
-        self.MIL_Prep = torch.nn.Sequential(
-                torch.nn.Linear(self.dim, self.L),
-                # torch.nn.BatchNorm1d(num_patches),
-                torch.nn.LayerNorm(self.L),
-                torch.nn.ReLU(inplace=True),
-                # nn.Dropout(0.1)
-                )
-        self.MIL_attention = nn.Sequential(
-            nn.Linear(self.L, self.D),
-            # nn.Tanh(),
-            # nn.BatchNorm1d(num_patches),
-            torch.nn.LayerNorm(self.D),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            nn.Linear(self.D, self.K)
-
-            # nn.Linear(self.L, self.K)
-        )
-
-        self.MIL_classifier = nn.Sequential(
-            nn.Linear(self.L*self.K, self.num_classes),
-        )
-
-
-        trunc_normal_(self.pos_embed, std=.02)
-        # self.head_dist.apply(self._init_weights)
-        self.MIL_Prep[0].apply(self._init_weights)
-        self.MIL_Prep[1].apply(self._init_weights)
-        self.MIL_attention[0].apply(self._init_weights)
-        self.MIL_attention[1].apply(self._init_weights)
-        self.MIL_attention[4].apply(self._init_weights)
-        self.MIL_classifier[0].apply(self._init_weights)
-
-    def forward_features(self, x):
-        # taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/vision_transformer.py
-        # with slight modifications to add the dist_token
-
-        B = x.shape[0]
-        x = self.patch_embed(x)
-
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        x = torch.cat((cls_tokens, x), dim=1)
-
-        x = x + self.pos_embed
-        x = self.pos_drop(x)
-
-        for blk in self.blocks:
-            x = blk(x)
-
-        x = self.norm(x)
-        return x[:, 0], x[:, 1:]
-
+    
     def forward(self, x):
-        x, x_patches = self.forward_features(x)
-        vt_out = self.head(x)
+        b,c,h,w = x.shape
+        x = self.in_conv(x)
+        feat_0 = self.layer_0(x)
+        feat_1 = self.layer_1(feat_0)
+        feat_2 = self.layer_2(feat_1)
+        feat_3 = self.layer_3(feat_2)
+        feat_4 = self.layer_4(feat_3)
+        out_feat = self.out_feat(feat_4)
+        fuse_feat = torch.cat([self.pool(self.pool(self.pool(feat_1))),self.pool(self.pool(feat_2)),self.pool(feat_3),feat_4],dim=1)
 
-        """MIL operations for the """
-        H = self.MIL_Prep(x_patches)  #B*N*D -->  B*N*L
-
-        A = self.MIL_attention(H)  # B*N*K
-        # A = torch.transpose(A, 1, 0)  # KxN
-        A = A.permute((0, 2, 1))  #B*K*N
-        A = nn.functional.softmax(A, dim=2)  # softmax over N
-        M = torch.bmm(A, H)  # B*K*N X B*N*L --> B*K*L
-        M = M.view(-1, M.size(1)*M.size(2))
-
-        mil_out = self.MIL_classifier(M)
-
-        # return vt_out, mil_out, x_patches
-        if self.training:
-            return vt_out, mil_out
-        else:
-            # during inference, return the average of both classifier predictions
-            return (vt_out+ mil_out) / 2
+        fuse_feat = self.out_feat(self.bottel_neck(fuse_feat))
+        # feat = torch.cat([fuse_feat,out_feat],dim=1)
+        feat = fuse_feat+out_feat
+        out = self.fusion_head(feat.view(b,-1))
+        return out
 
 
-###################
-class MILVisionTransformer_Distil(VisionTransformer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.dist_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
-        num_patches = self.patch_embed.num_patches
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, self.embed_dim))
-        self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
-        self.size2 = int(np.sqrt(num_patches))
-        self.dim = self.embed_dim
-        self.L = 256 #self.dim//3
-        self.D = 128 #self.dim//5
-        self.K = 1 #self.num_classes*1
-        self.MIL_Prep = torch.nn.Sequential(
-                torch.nn.Linear(self.dim, self.L),
-                # torch.nn.BatchNorm1d(num_patches),
-                torch.nn.LayerNorm(self.L),
-                torch.nn.ReLU(inplace=True),
-                # nn.Dropout(0.1)
-                )
-        self.MIL_attention = nn.Sequential(
-            nn.Linear(self.L, self.D),
-            # nn.Tanh(),
-            # nn.BatchNorm1d(num_patches),
-            torch.nn.LayerNorm(self.D),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            nn.Linear(self.D, self.K)
+class ResNetFuser(nn.Module):
 
-            # nn.Linear(self.L, self.K)
-        )
+    def __init__(self, base_model,out_dim=3,feat_extract=True):
+        super(ResNetFuser, self).__init__()
+        self.resnet_dict = {"resnet18": models.resnet18(pretrained=True),
+                            "resnet50": models.resnet50(pretrained=True)}
+        self.backbone = self.set_parameter_requires_grad(self._get_basemodel(base_model),feat_extract)
+        dim_mlp = self.backbone.fc.in_features        
+        #add mlp projection head
+        self.backbone.conv1 = nn.Conv2d(in_channels=1,out_channels=64,kernel_size=(7,7),padding=(3,3))
+        self.backbone.fc = nn.Identity()
+        self.mixer = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
 
-        self.MIL_classifier = nn.Sequential(
-            nn.Linear(self.L*self.K, self.num_classes),
-            # nn.Sigmoid()
-        )
+    def _get_basemodel(self, model_name):
+        model = self.resnet_dict[model_name]
+        return model
 
-        trunc_normal_(self.dist_token, std=.02)
-        trunc_normal_(self.pos_embed, std=.02)
-        self.head_dist.apply(self._init_weights)
-        self.MIL_Prep[0].apply(self._init_weights)
-        self.MIL_Prep[1].apply(self._init_weights)
-        self.MIL_attention[0].apply(self._init_weights)
-        self.MIL_attention[1].apply(self._init_weights)
-        self.MIL_attention[4].apply(self._init_weights)
-        self.MIL_classifier[0].apply(self._init_weights)
+    def set_parameter_requires_grad(self,model, feature_extracting):
+        if feature_extracting:
+            for param in model.parameters():
+                param.requires_grad = False
+        return model
 
-
-    def forward_features(self, x):
-        # taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/vision_transformer.py
-        # with slight modifications to add the dist_token
-
-        B = x.shape[0]
-        x = self.patch_embed(x)
-
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        dist_token = self.dist_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, dist_token, x), dim=1)
-
-        x = x + self.pos_embed
-        x = self.pos_drop(x)
-
-        for blk in self.blocks:
-            x = blk(x)
-
-        x = self.norm(x)
-        return x[:, 0], x[:, 1], x[:, 2:]
-
-    def forward(self, x):
-        x,  x_dist,  x_patches = self.forward_features(x)
-        vt_out = self.head(x)
-        dist_out = self.head_dist(x_dist)
-
-        """MIL operations for the """
-        """MIL operations for the """
-        H = self.MIL_Prep(x_patches)  #B*N*D -->  B*N*L
-
-        A = self.MIL_attention(H)  # B*N*K
-        # A = torch.transpose(A, 1, 0)  # KxN
-        A = A.permute((0, 2, 1))  #B*K*N
-        A = nn.functional.softmax(A, dim=2)  # softmax over N
-        M = torch.bmm(A, H)  # B*K*N X B*N*L --> B*K*L
-        M = M.view(-1, M.size(1)*M.size(2))
-
-        mil_out = self.MIL_classifier(M)
-
-        # return vt_out, mil_out, x_patches
-        if self.training:
-            return (vt_out, dist_out), mil_out
-        else:
-            # during inference, return the average of both classifier predictions
-            return (vt_out + dist_out + mil_out) / 3
-#######################
-
-
-###############################
-
-
-@register_model
-def MIL_VT_small_patch16_384(pretrained=False, **kwargs):
-    model = MILVisionTransformer(
-        img_size=384, patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    if pretrained:
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url="",
-            map_location="cpu", check_hash=True
-        )
-        model.load_state_dict(checkpoint["model"])
-    return model
-
-
-@register_model
-def MIL_VT_small_patch16_512(pretrained=False, **kwargs):
-    model = MILVisionTransformer(
-        img_size=512, patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    if pretrained:
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url="",
-            map_location="cpu", check_hash=True
-        )
-        model.load_state_dict(checkpoint["model"])
-    return model
+    
+    def forward(self, nr,seg):
+        nr = self.backbone(nr)
+        seg = self.backbone(seg)
+        feat = nr+seg
+        return self.mixer(feat)

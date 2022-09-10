@@ -41,9 +41,7 @@ class Train():
         return
     
     def model_intialiser(self):
-        self.model = ResNet(self.args.model_type,out_dim=3,feat_extract=self.feature_extract)
-        # self.model = ResNetFusion(self.args.model_type,out_dim=3,feat_extract=self.feature_extract)
-        # self.model = create_model('p2t_small',pretrained=False,num_classes=3,drop_rate=0.0, drop_path_rate=0.1,drop_block_rate=None,)
+        self.model = ResNetFuser(self.args.model_type,out_dim=3,feat_extract=self.feature_extract)
         self.model.to(device)
         return
     '''
@@ -55,11 +53,11 @@ class Train():
     '''
     def data_initaliser(self):
         train_transform = T.Compose([T.Resize((512,512)),T.RandomVerticalFlip(p=0.5),T.RandomHorizontalFlip(p=0.5),T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.5)\
-       ,T.RandomAffine((0,360)),T.ToTensor()])
-        val_transform = T.Compose([T.Resize((512,512)),T.ToTensor()])
-        train_loader = ImageFolder(self.args.train_input,transform = train_transform)
+       ,T.RandomAffine((0,360))])
+        val_transform = T.Compose([T.Resize((512,512))])
+        train_loader = Custom_Dataset(self.args.train_input,transforms = train_transform,is_train=True)
         self.train_ds = DataLoader(train_loader, batch_size=self.args.batch_size,shuffle=True, num_workers=os.cpu_count())
-        val_loader = ImageFolder(self.args.valid_input,transform = val_transform)
+        val_loader = Custom_Dataset(self.args.valid_input,transforms = val_transform,is_train=False)
         self.val_ds = DataLoader(val_loader, batch_size=60,shuffle=False, num_workers=os.cpu_count())
         return
     def optimizer_loss_initaliser(self):
@@ -119,22 +117,24 @@ class Train():
 
     def train_epoch(self):
         self.model.train()
-        for count,(inputs, labels) in enumerate(tqdm.tqdm(self.train_ds)):
+        for count,(normal_im,seg_im, labels) in enumerate(tqdm.tqdm(self.train_ds)):
             labels = torch.nn.functional.one_hot(labels,num_classes=3)
             if torch.rand((1))[0]>0.1:
-                inputs,labels = self.cutmix.forward(inputs, labels.argmax(dim=1))
+                inputs,labels = self.cutmix.forward(torch.cat([normal_im,seg_im],dim=1), labels.argmax(dim=1))
+                normal_im,seg_im = torch.tensor_split(inputs,2,dim=1)
             else:
-                inputs,labels = self.mixup.forward(inputs, labels.argmax(dim=1))
-            inputs = inputs.to(device)
+                inputs,labels = self.mixup.forward(torch.cat([normal_im,seg_im],dim=1), labels.argmax(dim=1))
+                normal_im,seg_im = torch.tensor_split(inputs,2,dim=1)
+            normal_im = normal_im.to(device)
+            seg_im = seg_im.to(device)
             labels = labels.to(device)
             self.optimizer.zero_grad()
             with torch.set_grad_enabled(True):
-                with torch.autograd.set_detect_anomaly(True):
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs,labels)
-                    loss.backward()
-                    self.optimizer.step()
-                    self.scheduler_steplr.step()
+                outputs = self.model(normal_im,seg_im)
+                loss = self.criterion(outputs,labels)
+                loss.backward()
+                self.optimizer.step()
+                self.scheduler_steplr.step()
         wandb.log({'Learning rate':self.optimizer.param_groups[0]['lr']})
         print(f'Epoch = {self.current_epoch} Train Loss = {loss.item()}')
         return
@@ -143,12 +143,13 @@ class Train():
         self.model.eval()
         sk_auc_roc = 0
         weighted_kappa = 0
-        for (inputs, labels) in tqdm.tqdm(self.val_ds):
-            inputs = inputs.to(device)
+        for (normal_im,seg_im, labels) in tqdm.tqdm(self.val_ds):
+            normal_im = normal_im.to(device)
+            seg_im = seg_im.to(device)
             labels = labels.to(device)
             self.optimizer.zero_grad()
             with torch.set_grad_enabled(False):
-                outputs = self.model(inputs)
+                outputs = self.model(normal_im,seg_im)
                 outputs = torch.nn.Softmax(dim=1)(outputs)
             self.AUC.update(outputs,labels)
             self.Kappa.update(outputs,labels)
