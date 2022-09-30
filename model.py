@@ -17,12 +17,13 @@ class ResNet(nn.Module):
         self.resnet_dict = {"resnet18": models.resnet18(weights=models.ResNet18_Weights),
                             "resnet50": models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2),
                             'effnetv2m':models.efficientnet_v2_m(weights=models.EfficientNet_V2_M_Weights),
-                            'effnetv2s':models.efficientnet_v2_s(weights=models.EfficientNet_V2_S_Weights)}
+                            'effnetv2s':models.efficientnet_v2_s(weights=models.EfficientNet_V2_S_Weights),
+                            'regnet':models.regnet_y_1_6gf(weights=models.RegNet_Y_1_6GF_Weights.IMAGENET1K_V2)}
         self.backbone = self.set_parameter_requires_grad(self._get_basemodel(base_model),feat_extract)
         if base_model=='effnetv2m' or base_model=='effnetv2s' :
             dim_mlp = self.backbone.classifier[1].in_features
             self.backbone.classifier = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))
-        elif base_model=='resnet18' or base_model=='resnet50':
+        elif base_model=='resnet18' or base_model=='resnet50' or base_model=='regnet' :
             dim_mlp = self.backbone.fc.in_features        
             #add mlp projection head
             self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp,dim_mlp), nn.ReLU(), nn.Linear(dim_mlp, out_dim))

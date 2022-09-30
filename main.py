@@ -22,11 +22,11 @@ if __name__ == '__main__':
     arg_parser.add_argument('--log_name', type=str,
                             default='classifier')
     arg_parser.add_argument('--model_type', type=str,
-    default='effnetv2s')
+    default='regnet')
     arg_parser.add_argument('--epochs', type=int,
                             default=200)
     arg_parser.add_argument('--batch_size', type=int,
-                            default=16)
+                            default=32)
     arg_parser.add_argument('--LR', type=int,
                             default=5e-3)
 

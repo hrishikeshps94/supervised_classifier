@@ -51,12 +51,14 @@ class Train():
     T.Resize((512,512))
     T.Normalize([0.193, 0.193, 0.193], [0.392, 0.392, 0.392])
     T.Normalize([0.417, 0.417, 0.417], [0.22, 0.22, 0.22])
+mean=[0.485, 0.456, 0.406] and std=[0.229, 0.224, 0.225].
+
 
     '''
     def data_initaliser(self):
         train_transform = T.Compose([T.Resize((512,512)),T.RandomVerticalFlip(p=0.5),T.RandomHorizontalFlip(p=0.5),T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.5)\
-       ,T.RandomAffine((0,360)),T.ToTensor()])
-        val_transform = T.Compose([T.Resize((512,512)),T.ToTensor()])
+       ,T.RandomAffine((0,360)),T.ToTensor(),T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+        val_transform = T.Compose([T.Resize((512,512)),T.ToTensor(),T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         train_loader = ImageFolder(self.args.train_input,transform = train_transform)
         self.train_ds = DataLoader(train_loader, batch_size=self.args.batch_size,shuffle=True, num_workers=os.cpu_count())
         val_loader = ImageFolder(self.args.valid_input,transform = val_transform)
@@ -77,12 +79,14 @@ class Train():
                     print("\t",name)
 
         # Observe that all parameters are being optimized
-        self.optimizer = optim.SGD(params_to_update, lr=(self.args.batch_size*0.3)/256, momentum=0.9)
+        self.optimizer = optim.SGD(params_to_update, lr=(self.args.batch_size*0.1)/256, momentum=0.9)
         total_count = self.args.epochs*len(self.train_ds)
         # self.optimizer = torch.optim.Adam(params_to_update, lr=self.args.LR)
         # self.scheduler_steplr = CosineAnnealingLR(self.optimizer,total_count,self.args.LR*(10**(-4)))
-        self.scheduler_steplr = CosineAnnealingLR(self.optimizer,total_count,((self.args.batch_size*0.3)/256)*(10**(-4)))
+        self.scheduler_steplr = CosineAnnealingLR(self.optimizer,total_count,((self.args.batch_size*0.1)/256)*(10**(-4)))
         self.criterion = PolyLoss(weight=torch.tensor([0.11,0.325,0.57]).to(device,dtype=torch.float32),reduction='mean')
+        # self.criterion = PolyLoss(weight=None,reduction='mean')
+        # self.criterion = ACELoss(num_classes=3,feat_dim=)
         self.criterion.to(device)
         self.AUC = AUROC(average='macro',num_classes=3).to(device)
         self.Kappa = CohenKappa(num_classes=3,weights='quadratic').to(device)
@@ -165,7 +169,7 @@ class Train():
         return ep_kappa,ep_AUC
 
     def run(self):
-        self.load_generator_checkpoint_for_training()
+        # self.load_generator_checkpoint_for_training()
         for _ in range(self.current_epoch,self.n_epochs-1):
             self.current_epoch+=1
             self.train_epoch()
