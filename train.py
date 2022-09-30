@@ -42,12 +42,10 @@ class Train():
         self.model = ResNet(self.args.model_type,out_dim=3,feat_extract=self.feature_extract)
         # data = torch.load('unsupervised/SimCLR/results/new_unsup.pth')
         # self.model = ResNet_Simclr(self.args.model_type,data,out_dim=3,feat_extract=self.feature_extract)
-        # self.base_model = MIL_VT_small_patch16_512(pretrained=False)
-        # self.model = create_model(model_name=self.base_model,num_classes=3)
         self.model.to(device)
         return
-# ,T.Normalize([0.4134, 0.4134, 0.4134], [0.2701, 0.2701, 0.2701])
-# T.Resize((512,512))
+    # ,T.Normalize([0.4134, 0.4134, 0.4134], [0.2701, 0.2701, 0.2701])
+    # T.Resize((512,512))
     def data_initaliser(self):
         train_transform = T.Compose([T.RandomVerticalFlip(p=0.5),T.RandomHorizontalFlip(p=0.5),T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.5)\
        ,T.RandomAffine((0,360)),T.ToTensor()])
@@ -129,12 +127,7 @@ class Train():
             self.optimizer.zero_grad()
             with torch.set_grad_enabled(True):
                 outputs = self.model(inputs)
-                # outputs_class, outputs_MIL  = self.model(inputs)
                 loss = self.criterion(outputs,labels)
-                # loss_1 = self.criterion(outputs_class,labels)
-                # loss_2 = self.criterion(outputs_MIL,labels)
-                # loss = 0.5*loss_1 + 0.5*loss_2
-                # print(f'Loss= {loss},org_loss = {org_loss}')
                 loss.backward()
                 self.optimizer.step()
                 # self.scheduler_warmup.step(self.current_epoch*count)
@@ -166,7 +159,8 @@ class Train():
         self.Kappa.reset()
         wandb.log({'val_kappa':ep_kappa.item()})
         wandb.log({'val_AUC':ep_AUC.item()})
-        print(f'Epoch = {self.current_epoch} val_slearn_auc = {sk_auc_roc} val_org_kappa={weighted_kappa} best Kappa = {self.best_kappa},best AUC = {self.best_auc},')
+        print(f'Epoch = {self.current_epoch} val_slearn_auc = {sk_auc_roc} \
+            val_org_kappa={weighted_kappa} best Kappa = {self.best_kappa},best AUC = {self.best_auc},')
         # print(f'Epoch = {self.current_epoch} Val Kappa = {ep_kappa},Val AUC = {ep_AUC}')
         return ep_kappa,ep_AUC
 
